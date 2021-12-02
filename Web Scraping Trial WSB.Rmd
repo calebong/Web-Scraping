@@ -1,0 +1,1009 @@
+---
+title: "Web Scraping Trial 2"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Load libraries
+
+```{r}
+library(tidyr)
+library(purrr)
+library(readr)
+library(dplyr)
+library(data.table)
+library(tibble)
+library(stringr)
+library(forcats)
+library(rvest)
+library(furrr)
+```
+
+```{r}
+# Load and prepare vector of tickers (no etfs)
+nasdaqtraded <- read.csv('/Users/Caleb/Documents/Working Directory/Nasdaq File/nasdaqtraded.txt', sep = '|')
+tickers <- nasdaqtraded %>% 
+  # dplyr::filter(ETF == 'N') %>% 
+  pull(Symbol)
+```
+
+
+# NEW posts
+```{r}
+future::plan('multiprocess')
+
+#
+wsb_new_url <- 'https://old.reddit.com/r/wallstreetbets/new/?limit=100'
+wsb_new_read <- read_html(wsb_new_url)
+
+# Prepare df of urls, id, and nodes
+url_df_wsb_new <- wsb_new_read %>% 
+  html_nodes('.comments') %>% 
+  html_attr("href") %>% 
+  as_tibble() %>% 
+  mutate(id = substr(value, 50, 55)) %>% # get unique 6 character id for each reddit thread
+  mutate(node_title = paste('#thing_t3_', id, ' .title', sep = '')) %>% # get the specific node to be mapped for comments
+  mutate(node_comments = paste('#siteTable_t3_', id, ' .md p', sep = ''))
+
+# url_df_wsb_new <- url_df_wsb_new %>%  mutate(time = html_text(html_nodes(wsb_new_read,'.live-timestamp'))) # time
+
+# extract the posts, comments AND title from each url
+all_df_wsb_new <- url_df_wsb_new %>% 
+  filter(str_detect(value,'/user/') == F) %>%  
+  # For Titles
+  mutate(title = furrr::future_map2_chr(.x = value, 
+                                        .y = node_title, 
+                                        .f = function(.x, .y) tryCatch(((read_html(.x) %>% 
+                                                                           html_nodes(.y) %>% 
+                                                                           html_text())[2]),
+                                                                       error = function(e){print(paste(.x, 'not found'));NA}),
+                                        .progress = TRUE,
+                                        .options = furrr::furrr_options(seed = TRUE)
+                                        )
+         ) %>% 
+  # For Posts
+  mutate(post = furrr::future_map_chr(.x = value, 
+                               .f = function(.x) tryCatch(((read_html(.x) %>% 
+                                                              html_nodes('.md') %>% 
+                                                              html_text())[2]),
+                                                          error = function(e){print(paste(.x, 'not found'));NA}),
+                               .progress = TRUE,
+                               .options = furrr::furrr_options(seed = TRUE)
+                               )
+         ) %>%   
+  # For Comments
+  mutate(comment = furrr::future_map2(.x = value, 
+                               .y = node_comments, 
+                               .f = function(.x, .y) tryCatch((read_html(.x) %>% 
+                                                                 html_nodes(.y) %>% 
+                                                                 html_text() %>% 
+                                                                 as_tibble()),
+                                                              error = function(e){print(paste(.x, 'not found'));NA}),
+                               .progress = TRUE,
+                               .options = furrr::furrr_options(seed = TRUE)
+                               )
+         ) %>% 
+  # For time
+  mutate(time = furrr::future_map2_chr(.x = value, 
+                                        .y = id, 
+                                        .f = function(.x, .y) {tmp <- try(read_html(.x) %>% 
+                                                                            html_nodes(xpath = paste0('//*[@id="',
+                                                                                                      'thing_t3_',
+                                                                                                      .y,
+                                                                                                      '"]/div[2]/div[1]/p[2]/time')) %>% 
+                                                                            first() %>% 
+                                                                            html_attr('datetime') %>% 
+                                                                            unlist())
+                                        if(!inherits(tmp,'try-error'))
+                                          tmp},
+                                        .progress = TRUE,
+                                        .options = furrr::furrr_options(seed = TRUE)
+                                        ),
+         time = lubridate::as_datetime(time, tz = 'Asia/Singapore')
+         )
+
+
+# Get comments only
+comment_only <- all_df_wsb_new %>% 
+  select(comment) %>% 
+  unnest() %>% 
+  mutate(value = str_to_upper(value)) %>% 
+  mutate(extracted = str_extract_all(value, '\\b[A-Za-z]{2,4}\\b')) # extract all 2,3,4 letter words
+
+# Get title only
+title_only <- all_df_wsb_new %>% 
+  select(title) %>% 
+  mutate(value = str_to_upper(title)) %>% 
+  mutate(extracted = str_extract_all(value, '\\b[A-Za-z]{2,4}\\b'))
+
+# Get posts only
+post_only <- all_df_wsb_new %>% 
+  select(post) %>% 
+  mutate(value = str_to_upper(post)) %>% 
+  mutate(extracted = str_extract_all(value, '\\b[A-Za-z]{2,4}\\b'))
+  
+
+# Prepare dataframe of ticker frequencies
+# For comments
+tickerFreqComment <- unlist(pull(comment_only, extracted))[unlist(pull(comment_only, extracted)) %in% tickers] %>% 
+  table() %>% 
+  as_tibble() %>% 
+  rename(ticker = '.',
+         freqComment = n) %>% 
+  arrange(desc(freqComment))
+
+
+# For title
+tickerFreqTitle <- unlist(pull(title_only, extracted))[unlist(pull(title_only, extracted)) %in% tickers] %>% 
+  table() %>% 
+  as_tibble() %>% 
+  rename(ticker = '.',
+         freqTitle = n) %>% 
+  arrange(desc(freqTitle))
+
+# For post
+tickerFreqPost <- unlist(pull(post_only, extracted))[unlist(pull(post_only, extracted)) %in% tickers] %>% 
+  table() %>% 
+  as_tibble() %>% 
+  rename(ticker = '.',
+         freqPost = n) %>% 
+  arrange(desc(freqPost))
+
+
+
+# Combine into frequency table
+freqTableNewWsb <- tickerFreqTitle %>% 
+  full_join(tickerFreqPost, by = 'ticker') %>% 
+  full_join(tickerFreqComment, by = 'ticker') %>% 
+  replace_na(list(freqTitle = 0,
+                  freqPost = 0,
+                  freqComment = 0)) %>% 
+  mutate(totalFreq = freqTitle + freqPost + freqComment) %>% 
+  arrange(desc(freqTitle), desc(freqPost))
+
+freqTableNewWsb
+write_csv(freqTableNewWsb,'freqTableNewWsb.csv')
+```
+
+
+# HOT posts
+
+```{r}
+#
+wsb_hot_url <- 'https://old.reddit.com/r/wallstreetbets/hot/?limit=100'
+wsb_hot_read <- read_html(wsb_hot_url)
+
+# Prepare df of urls, id, and nodes
+url_df_wsb_hot <- wsb_hot_read %>% 
+  html_nodes('.comments') %>% 
+  html_attr("href") %>% 
+  as_tibble() %>% 
+  mutate(id = substr(value, 50, 55)) %>% # get unique 6 character id for each reddit thread
+  mutate(node_title = paste('#thing_t3_', id, ' .title', sep = '')) %>% # get the specific node to be mapped for comments
+  mutate(node_comments = paste('#siteTable_t3_', id, ' .md p', sep = ''))
+
+# url_df_wsb_hot <- url_df_wsb_hot %>%  mutate(time = html_text(html_nodes(wsb_hot_read,'.live-timestamp'))) # time
+
+
+# extract the posts, comments AND title from each url
+all_df_wsb_hot <- url_df_wsb_hot %>% 
+  filter(str_detect(value,'/user/') == F) %>% 
+  # For Titles
+  mutate(title = furrr::future_map2_chr(.x = value, 
+                                        .y = node_title, 
+                                        .f = function(.x, .y) tryCatch(((read_html(.x) %>% 
+                                                                           html_nodes(.y) %>% 
+                                                                           html_text())[2]),
+                                                                       error = function(e){print(paste(.x, 'not found'));NA}),
+                                        .progress = TRUE,
+                                        .options = furrr::furrr_options(seed = TRUE)
+  )
+  ) %>% 
+  # For Posts
+  mutate(post = furrr::future_map_chr(.x = value, 
+                               .f = function(.x) tryCatch(((read_html(.x) %>% 
+                                                              html_nodes('.md') %>% 
+                                                              html_text())[2]),
+                                                          error = function(e){print(paste(.x, 'not found'));NA}),
+                               .progress = TRUE,
+                               .options = furrr::furrr_options(seed = TRUE)
+                               )
+         ) %>%   
+  # For Comments
+  mutate(comment = furrr::future_map2(.x = value, 
+                               .y = node_comments, 
+                               .f = function(.x, .y) tryCatch((read_html(.x) %>% 
+                                                                 html_nodes(.y) %>% 
+                                                                 html_text() %>% 
+                                                                 as_tibble()),
+                                                              error = function(e){print(paste(.x, 'not found'));NA}),
+                               .progress = TRUE,
+                               .options = furrr::furrr_options(seed = TRUE)
+                               )
+         ) %>% 
+  # For time
+  mutate(time = furrr::future_map2_chr(.x = value, 
+                                        .y = id, 
+                                        .f = function(.x, .y) {tmp <- try(read_html(.x) %>% 
+                                                                            html_nodes(xpath = paste0('//*[@id="',
+                                                                                                      'thing_t3_',
+                                                                                                      .y,
+                                                                                                      '"]/div[2]/div[1]/p[2]/time')) %>% 
+                                                                            first() %>% 
+                                                                            html_attr('datetime') %>% 
+                                                                            unlist())
+                                        if(!inherits(tmp,'try-error'))
+                                          tmp},
+                                        .progress = TRUE,
+                                        .options = furrr::furrr_options(seed = TRUE)
+                                        ),
+         time = lubridate::as_datetime(time, tz = 'Asia/Singapore')
+         )
+
+
+# Get comments only
+comment_only <- all_df_wsb_hot %>% 
+  select(comment) %>% 
+  unnest() %>% 
+  mutate(value = str_to_upper(value)) %>% 
+  mutate(extracted = str_extract_all(value, '\\b[A-Za-z]{2,4}\\b')) # extract all 2,3,4 letter words
+
+# Get title only
+title_only <- all_df_wsb_hot %>% 
+  select(title) %>% 
+  mutate(value = str_to_upper(title)) %>% 
+  mutate(extracted = str_extract_all(value, '\\b[A-Za-z]{2,4}\\b'))
+
+# Get posts only
+post_only <- all_df_wsb_hot %>% 
+  select(post) %>% 
+  mutate(value = str_to_upper(post)) %>% 
+  mutate(extracted = str_extract_all(value, '\\b[A-Za-z]{2,4}\\b'))
+
+  
+
+# Prepare dataframe of ticker frequencies
+# For comments
+tickerFreqComment <- unlist(pull(comment_only, extracted))[unlist(pull(comment_only, extracted)) %in% tickers] %>% 
+  table() %>% 
+  as_tibble() %>% 
+  rename(ticker = '.',
+         freqComment = n) %>% 
+  arrange(desc(freqComment))
+
+
+# For title
+tickerFreqTitle <- unlist(pull(title_only, extracted))[unlist(pull(title_only, extracted)) %in% tickers] %>% 
+  table() %>% 
+  as_tibble() %>% 
+  rename(ticker = '.',
+         freqTitle = n) %>% 
+  arrange(desc(freqTitle))
+
+# For post
+tickerFreqPost <- unlist(pull(post_only, extracted))[unlist(pull(post_only, extracted)) %in% tickers] %>% 
+  table() %>% 
+  as_tibble() %>% 
+  rename(ticker = '.',
+         freqPost = n) %>% 
+  arrange(desc(freqPost))
+
+
+
+# Combine into frequency table
+freqTableHotWsb <- tickerFreqTitle %>% 
+  full_join(tickerFreqPost, by = 'ticker') %>% 
+  full_join(tickerFreqComment, by = 'ticker') %>% 
+  replace_na(list(freqTitle = 0,
+                  freqPost = 0,
+                  freqComment = 0)) %>% 
+  mutate(totalFreq = freqTitle + freqPost + freqComment) %>% 
+  arrange(desc(freqTitle), desc(freqPost))
+
+freqTableHotWsb
+write_csv(freqTableHotWsb,'freqTableHotWsb.csv')
+```
+
+# NEW DD posts
+
+```{r}
+wsb_dd_url <- 'https://ns.reddit.com/r/wallstreetbets/search?sort=new&restrict_sr=on&q=flair%3ADD&limit=100'
+wsb_dd_read <- read_html(wsb_dd_url)
+
+# Prepare df of urls, id, and nodes
+url_df_wsb_dd <- wsb_dd_read %>% 
+  html_nodes('.search-comments') %>% 
+  html_attr("href") %>% 
+  as_tibble() %>% 
+  mutate(id = substr(value, 49, 54)) %>% # get unique 6 character id for each reddit thread
+  mutate(node_title = paste('#thing_t3_', id, ' .title', sep = '')) %>% # get the specific node to be mapped for comments
+  mutate(node_comments = paste('#siteTable_t3_', id, ' .md p', sep = ''))
+
+# extract the posts, comments AND title from each url
+all_df_wsb_dd <- url_df_wsb_dd %>% 
+  filter(str_detect(value,'/user/') == F) %>% 
+  # For Titles
+  mutate(title = furrr::future_map2_chr(.x = value, 
+                                        .y = node_title, 
+                                        .f = function(.x, .y) tryCatch(((read_html(.x) %>% 
+                                                                           html_nodes(.y) %>% 
+                                                                           html_text())[2]),
+                                                                       error = function(e){print(paste(.x, 'not found'));NA}),
+                                        .progress = TRUE,
+                                        .options = furrr::furrr_options(seed = TRUE)
+                                        )
+         ) %>% 
+  # For Posts
+  mutate(post = furrr::future_map_chr(.x = value, 
+                               .f = function(.x) tryCatch(((read_html(.x) %>% 
+                                                              html_nodes('.md') %>% 
+                                                              html_text())[2]),
+                                                          error = function(e){print(paste(.x, 'not found'));NA}),
+                               .progress = TRUE,
+                               .options = furrr::furrr_options(seed = TRUE)
+                               )
+         ) %>%   
+  # For Comments
+  mutate(comment = furrr::future_map2(.x = value, 
+                               .y = node_comments, 
+                               .f = function(.x, .y) tryCatch((read_html(.x) %>% 
+                                                                 html_nodes(.y) %>% 
+                                                                 html_text() %>% 
+                                                                 as_tibble()),
+                                                              error = function(e){print(paste(.x, 'not found'));NA}),
+                               .progress = TRUE,
+                               .options = furrr::furrr_options(seed = TRUE)
+                               )
+         ) %>% 
+  # For time
+  mutate(time = furrr::future_map2_chr(.x = value, 
+                                        .y = id, 
+                                        .f = function(.x, .y) {tmp <- try(read_html(.x) %>% 
+                                                                            html_nodes(xpath = paste0('//*[@id="',
+                                                                                                      'thing_t3_',
+                                                                                                      .y,
+                                                                                                      '"]/div[2]/div[1]/p[2]/time')) %>% 
+                                                                            first() %>% 
+                                                                            html_attr('datetime') %>% 
+                                                                            unlist())
+                                        if(!inherits(tmp,'try-error'))
+                                          tmp},
+                                        .progress = TRUE,
+                                        .options = furrr::furrr_options(seed = TRUE)
+                                        ),
+         time = lubridate::as_datetime(time, tz = 'Asia/Singapore')
+         )
+
+# Get comments only
+comment_only <- all_df_wsb_dd %>% 
+  select(comment) %>% 
+  unnest() %>% 
+  mutate(value = str_to_upper(value)) %>% 
+  mutate(extracted = str_extract_all(value, '\\b[A-Za-z]{2,4}\\b')) # extract all 2,3,4 letter words
+
+# Get title only
+title_only <- all_df_wsb_dd %>% 
+  select(title) %>% 
+  mutate(value = str_to_upper(title)) %>% 
+  mutate(extracted = str_extract_all(value, '\\b[A-Za-z]{2,4}\\b'))
+
+# Get posts only
+post_only <- all_df_wsb_dd %>% 
+  select(post) %>% 
+  mutate(value = str_to_upper(post)) %>% 
+  mutate(extracted = str_extract_all(value, '\\b[A-Za-z]{2,4}\\b'))
+
+
+
+# Prepare dataframe of ticker frequencies
+# For comments
+tickerFreqComment <- unlist(pull(comment_only, extracted))[unlist(pull(comment_only, extracted)) %in% tickers] %>% 
+  table() %>% 
+  as_tibble() %>% 
+  rename(ticker = '.',
+         freqComment = n) %>% 
+  arrange(desc(freqComment))
+
+
+# For title
+tickerFreqTitle <- unlist(pull(title_only, extracted))[unlist(pull(title_only, extracted)) %in% tickers] %>% 
+  table() %>% 
+  as_tibble() %>% 
+  rename(ticker = '.',
+         freqTitle = n) %>% 
+  arrange(desc(freqTitle))
+
+# For post
+tickerFreqPost <- unlist(pull(post_only, extracted))[unlist(pull(post_only, extracted)) %in% tickers] %>% 
+  table() %>% 
+  as_tibble() %>% 
+  rename(ticker = '.',
+         freqPost = n) %>% 
+  arrange(desc(freqPost))
+
+
+
+# Combine into frequency table
+freqTableDdWsb <- tickerFreqTitle %>% 
+  full_join(tickerFreqPost, by = 'ticker') %>% 
+  full_join(tickerFreqComment, by = 'ticker') %>% 
+  replace_na(list(freqTitle = 0,
+                  freqPost = 0,
+                  freqComment = 0)) %>% 
+  mutate(totalFreq = freqTitle + freqPost + freqComment) %>% 
+  arrange(desc(freqTitle), desc(freqPost))
+
+freqTableDdWsb
+# write_csv(freqTable,'freqTable.csv')
+```
+
+
+
+# Get tickers
+
+
+```{r}
+# freqTableDdWsb$ticker
+# freqTableNewWsb$ticker
+# freqTableDdWsb$ticker
+
+# tickerWsb <- c(unique(c(freqTableDdWsb$ticker, freqTableNewWsb$ticker, freqTableDdWsb$ticker)), 'PLTR','TIGR','NKE','NNDM','TRCH','FUV','PDD','JD','SM','SOL','GEVO','SPY','SLV','GLD','NEGG','FUTU','SUMO','CLDR','SRNE','BNGO','FCEL','MMAT','BLDP','ZM','RIOT','MARA','EBON','BTBT','SOFI','PSFE','LCID','OKTA','XPEV','LI','NIU','NIO','INGN','PAYO','FPAC','ILMN','ZG','TREE','SGEN','SRPT','TWLO','REGN','MVST','SQ','BB','WKHS','BABA','BIDU','HUYA','PFE','DAL','UAL','CCL','MGM','AMD','TSM','INTC','INTU','SNOW','ITUB','CLDR','MNSO','BBY','BBBY','ABBV','SEDG','ENPH','CSIQ','CVS','CLOV','PSTH','MMAT', pull(data, baseSymbol)) %>%
+#   sort() %>% unique()
+
+tickerWsb <- c(unique(c(freqTableDdWsb$ticker, freqTableNewWsb$ticker, freqTableDdWsb$ticker)), 'PLTR','TIGR','NKE','NNDM','TRCH','FUV','PDD','JD','SM','SOL','GEVO','SPY','SLV','GLD','NEGG','FUTU','SUMO','CLDR','SRNE','BNGO','FCEL','MMAT','BLDP','ZM','RIOT','MARA','EBON','BTBT','SOFI','PSFE','LCID','OKTA','XPEV','LI','NIU','NIO','INGN','PAYO','FPAC','ILMN','ZG','TREE','SGEN','SRPT','TWLO','REGN','MVST','SQ','BB','WKHS','BABA','BIDU','HUYA','PFE','DAL','UAL','CCL','MGM','AMD','TSM','INTC','INTU','SNOW','ITUB','CLDR','MNSO','BBY','BBBY','ABBV','SEDG','ENPH','CSIQ','CVS','CLOV','PSTH','MMAT', pull(data, baseSymbol), recentTickerShort, recentTicker) %>%
+  sort() %>% unique()
+
+
+```
+
+
+# Sentiment
+
+# New
+
+```{r}
+# Title
+future::plan('multiprocess')
+
+all_df_wsb_new <- all_df_wsb_new %>% na.omit() %>% 
+  mutate(wordTokenTitle = purrr::map(.x = title,
+                                            .f = function(.x) { .x %>%
+                                                as_tibble() %>% 
+                                                mutate(linenumber = row_number()) %>% 
+                                                unnest_tokens(words, value, token = 'words')} 
+                                            )
+                          ) %>% 
+  mutate(sentenceTokenTitle = purrr::map(.x = title,
+                                            .f = function(.x) { .x %>%
+                                                as_tibble() %>% 
+                                                mutate(linenumber = row_number()) %>% 
+                                                unnest_tokens(sentences, value, token = 'sentences')} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenScoreTitle = purrr::map(.x = wordTokenTitle,
+                                     .f = function(.x) { .x %>% group_by(linenumber) %>%
+                                                inner_join(get_sentiments("afinn"), by = c('words' = 'word')) %>%
+                                                summarize(score = sum(value))} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenScoreSumTitle = purrr::map_dbl(.x = wordTokenScoreTitle,
+                                     .f = function(.x) { .x %>% 
+                                         summarize(score = sum(score)) %>% 
+                                         pull()} 
+                                            )
+                          ) %>% 
+  mutate(sentenceTokenScoreTitle = furrr::future_map(.x = sentenceTokenTitle,
+                                         .f = function(.x) {
+                                           out <- .x %>% mutate(score = purrr::map_dbl(.x = sentences,
+                                                                 .f = function(.x){
+                                                                   sentiment(.x) %>% 
+                                                                     summarize(sentiment = sum(sentiment)) %>% 
+                                                                     pull()
+                                                                   } ))
+                                         },
+                                        .progress = TRUE,
+                                        .options = furrr::furrr_options(seed = TRUE))) %>% 
+  mutate(sentenceTokenScoreSumTitle = purrr::map_dbl(.x = sentenceTokenScoreTitle,
+                                     .f = function(.x) { .x %>% 
+                                         summarize(score = sum(score)) %>% 
+                                         pull()} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenPost = purrr::map(.x = post,
+                                            .f = function(.x) { .x %>%
+                                                as_tibble() %>% 
+                                                mutate(linenumber = row_number()) %>% 
+                                                unnest_tokens(words, value, token = 'words')} 
+                                            )
+                          ) %>% 
+  mutate(sentenceTokenPost = purrr::map(.x = post,
+                                            .f = function(.x) { .x %>%
+                                                as_tibble() %>% 
+                                                mutate(linenumber = row_number()) %>% 
+                                                unnest_tokens(sentences, value, token = 'sentences')} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenScorePost = purrr::map(.x = wordTokenPost,
+                                     .f = function(.x) { .x %>% group_by(linenumber) %>%
+                                                inner_join(get_sentiments("afinn"), by = c('words' = 'word')) %>%
+                                                summarize(score = sum(value))} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenScoreSumPost = purrr::map_dbl(.x = wordTokenScorePost,
+                                     .f = function(.x) { .x %>% 
+                                         summarize(score = sum(score)) %>% 
+                                         pull()} 
+                                            )
+                          ) %>% 
+  mutate(sentenceTokenScorePost = furrr::future_map(.x = sentenceTokenPost,
+                                         .f = function(.x) {
+                                           out <- .x %>% mutate(score = purrr::map_dbl(.x = sentences,
+                                                                 .f = function(.x){
+                                                                   sentiment(.x) %>% 
+                                                                     summarize(sentiment = sum(sentiment)) %>% 
+                                                                     pull()
+                                                                   } ))
+                                         },
+                                        .progress = TRUE,
+                                        .options = furrr::furrr_options(seed = TRUE))) %>% 
+  mutate(sentenceTokenScoreSumPost = purrr::map_dbl(.x = sentenceTokenScorePost,
+                                     .f = function(.x) { .x %>% 
+                                         summarize(score = sum(score)) %>% 
+                                         pull()} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenComment = purrr::map(.x = comment,
+                                            .f = function(.x) { .x %>% 
+                                                mutate(linenumber = row_number()) %>% 
+                                                unnest_tokens(words, value, token = 'words')} 
+                                            )
+                          ) %>% 
+  mutate(sentenceTokenComment = purrr::map(.x = comment,
+                                            .f = function(.x) { .x %>% 
+                                                mutate(linenumber = row_number()) %>% 
+                                                unnest_tokens(sentences, value, token = 'sentences')} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenScoreComment = purrr::map(.x = wordTokenComment,
+                                     .f = function(.x) { .x %>% group_by(linenumber) %>%
+                                                inner_join(get_sentiments("afinn"), by = c('words' = 'word')) %>%
+                                                summarize(score = sum(value))} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenScoreSumComment = purrr::map_dbl(.x = wordTokenScoreComment,
+                                     .f = function(.x) { .x %>% 
+                                         summarize(score = sum(score)) %>% 
+                                         pull()} 
+                                            )
+                          ) %>% 
+  mutate(sentenceTokenScoreComment = furrr::future_map(.x = sentenceTokenComment,
+                                         .f = function(.x) {
+                                           out <- .x %>% mutate(score = purrr::map_dbl(.x = sentences,
+                                                                 .f = function(.x){
+                                                                   sentiment(.x) %>% 
+                                                                     summarize(sentiment = sum(sentiment)) %>% 
+                                                                     pull()
+                                                                   } ))
+                                         },
+                                        .progress = TRUE,
+                                        .options = furrr::furrr_options(seed = TRUE))) %>% 
+  mutate(sentenceTokenScoreSumComment = purrr::map_dbl(.x = sentenceTokenScoreComment,
+                                     .f = function(.x) { .x %>% 
+                                         summarize(score = sum(score)) %>% 
+                                         pull()} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenDescTitle = purrr::map(.x = wordTokenTitle,
+                                     .f = function(.x) { .x %>% group_by(linenumber) %>%
+                                                inner_join(get_sentiments("loughran"), by = c('words' = 'word')) } 
+                                            )
+                          ) %>% 
+  mutate(wordTokenDescScoreTitle = purrr::map(.x = wordTokenDescTitle,
+                                     .f = function(.x) { .x %>% group_by(sentiment) %>%
+                                                summarize(score = n() )  } 
+                                            )
+  ) %>% 
+  mutate(wordTokenDescPost = purrr::map(.x = wordTokenPost,
+                                     .f = function(.x) { .x %>% group_by(linenumber) %>%
+                                                inner_join(get_sentiments("loughran"), by = c('words' = 'word')) } 
+                                            )
+                          ) %>% 
+  mutate(wordTokenDescScorePost = purrr::map(.x = wordTokenDescPost,
+                                     .f = function(.x) { .x %>% group_by(sentiment) %>%
+                                                summarize(score = n() )  } 
+                                            )
+  ) %>% 
+  mutate(wordTokenDescComment = purrr::map(.x = wordTokenComment,
+                                     .f = function(.x) { .x %>% group_by(linenumber) %>%
+                                                inner_join(get_sentiments("loughran"), by = c('words' = 'word')) } 
+                                            )
+                          ) %>% 
+  mutate(wordTokenDescScoreComment = purrr::map(.x = wordTokenDescComment,
+                                     .f = function(.x) { .x %>% group_by(sentiment) %>%
+                                                summarize(score = n() )  } 
+                                            )
+  )
+```
+
+```{r}
+all_df_wsb_new_sum <- all_df_wsb_new %>% select(value, 
+                                                title,
+                                                post, 
+                                                comment, 
+                                                time,
+                                                wordTokenScoreSumTitle,
+                                                sentenceTokenScoreSumTitle,
+                                                wordTokenScoreSumPost,
+                                                sentenceTokenScoreSumPost,
+                                                wordTokenScoreSumComment,
+                                                sentenceTokenScoreSumComment,
+                                                )
+
+# all_df_wsb_new_sum %>% ggplot(aes(x = sentenceTokenScoreSumPost, y = sentenceTokenScoreSumComment, color = sentenceTokenScoreSumTitle)) + geom_point()
+```
+
+
+# Hot
+
+```{r}
+# Title
+future::plan('multiprocess')
+
+all_df_wsb_hot <- all_df_wsb_hot %>% na.omit() %>% 
+  mutate(wordTokenTitle = purrr::map(.x = title,
+                                            .f = function(.x) { .x %>%
+                                                as_tibble() %>% 
+                                                mutate(linenumber = row_number()) %>% 
+                                                unnest_tokens(words, value, token = 'words')} 
+                                            )
+                          ) %>% 
+  mutate(sentenceTokenTitle = purrr::map(.x = title,
+                                            .f = function(.x) { .x %>%
+                                                as_tibble() %>% 
+                                                mutate(linenumber = row_number()) %>% 
+                                                unnest_tokens(sentences, value, token = 'sentences')} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenScoreTitle = purrr::map(.x = wordTokenTitle,
+                                     .f = function(.x) { .x %>% group_by(linenumber) %>%
+                                                inner_join(get_sentiments("afinn"), by = c('words' = 'word')) %>%
+                                                summarize(score = sum(value))} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenScoreSumTitle = purrr::map_dbl(.x = wordTokenScoreTitle,
+                                     .f = function(.x) { .x %>% 
+                                         summarize(score = sum(score)) %>% 
+                                         pull()} 
+                                            )
+                          ) %>% 
+  mutate(sentenceTokenScoreTitle = furrr::future_map(.x = sentenceTokenTitle,
+                                         .f = function(.x) {
+                                           out <- .x %>% mutate(score = purrr::map_dbl(.x = sentences,
+                                                                 .f = function(.x){
+                                                                   sentiment(.x) %>% 
+                                                                     summarize(sentiment = sum(sentiment)) %>% 
+                                                                     pull()
+                                                                   } ))
+                                         },
+                                        .progress = TRUE,
+                                        .options = furrr::furrr_options(seed = TRUE))) %>% 
+  mutate(sentenceTokenScoreSumTitle = purrr::map_dbl(.x = sentenceTokenScoreTitle,
+                                     .f = function(.x) { .x %>% 
+                                         summarize(score = sum(score)) %>% 
+                                         pull()} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenPost = purrr::map(.x = post,
+                                            .f = function(.x) { .x %>%
+                                                as_tibble() %>% 
+                                                mutate(linenumber = row_number()) %>% 
+                                                unnest_tokens(words, value, token = 'words')} 
+                                            )
+                          ) %>% 
+  mutate(sentenceTokenPost = purrr::map(.x = post,
+                                            .f = function(.x) { .x %>%
+                                                as_tibble() %>% 
+                                                mutate(linenumber = row_number()) %>% 
+                                                unnest_tokens(sentences, value, token = 'sentences')} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenScorePost = purrr::map(.x = wordTokenPost,
+                                     .f = function(.x) { .x %>% group_by(linenumber) %>%
+                                                inner_join(get_sentiments("afinn"), by = c('words' = 'word')) %>%
+                                                summarize(score = sum(value))} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenScoreSumPost = purrr::map_dbl(.x = wordTokenScorePost,
+                                     .f = function(.x) { .x %>% 
+                                         summarize(score = sum(score)) %>% 
+                                         pull()} 
+                                            )
+                          ) %>% 
+  mutate(sentenceTokenScorePost = furrr::future_map(.x = sentenceTokenPost,
+                                         .f = function(.x) {
+                                           out <- .x %>% mutate(score = purrr::map_dbl(.x = sentences,
+                                                                 .f = function(.x){
+                                                                   sentiment(.x) %>% 
+                                                                     summarize(sentiment = sum(sentiment)) %>% 
+                                                                     pull()
+                                                                   } ))
+                                         },
+                                        .progress = TRUE,
+                                        .options = furrr::furrr_options(seed = TRUE))) %>% 
+  mutate(sentenceTokenScoreSumPost = purrr::map_dbl(.x = sentenceTokenScorePost,
+                                     .f = function(.x) { .x %>% 
+                                         summarize(score = sum(score)) %>% 
+                                         pull()} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenComment = purrr::map(.x = comment,
+                                            .f = function(.x) { .x %>% 
+                                                mutate(linenumber = row_number()) %>% 
+                                                unnest_tokens(words, value, token = 'words')} 
+                                            )
+                          ) %>% 
+  mutate(sentenceTokenComment = purrr::map(.x = comment,
+                                            .f = function(.x) { .x %>% 
+                                                mutate(linenumber = row_number()) %>% 
+                                                unnest_tokens(sentences, value, token = 'sentences')} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenScoreComment = purrr::map(.x = wordTokenComment,
+                                     .f = function(.x) { .x %>% group_by(linenumber) %>%
+                                                inner_join(get_sentiments("afinn"), by = c('words' = 'word')) %>%
+                                                summarize(score = sum(value))} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenScoreSumComment = purrr::map_dbl(.x = wordTokenScoreComment,
+                                     .f = function(.x) { .x %>% 
+                                         summarize(score = sum(score)) %>% 
+                                         pull()} 
+                                            )
+                          ) %>% 
+  mutate(sentenceTokenScoreComment = furrr::future_map(.x = sentenceTokenComment,
+                                         .f = function(.x) {
+                                           out <- .x %>% mutate(score = purrr::map_dbl(.x = sentences,
+                                                                 .f = function(.x){
+                                                                   sentiment(.x) %>% 
+                                                                     summarize(sentiment = sum(sentiment)) %>% 
+                                                                     pull()
+                                                                   } ))
+                                         },
+                                        .progress = TRUE,
+                                        .options = furrr::furrr_options(seed = TRUE))) %>% 
+  mutate(sentenceTokenScoreSumComment = purrr::map_dbl(.x = sentenceTokenScoreComment,
+                                     .f = function(.x) { .x %>% 
+                                         summarize(score = sum(score)) %>% 
+                                         pull()} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenDescTitle = purrr::map(.x = wordTokenTitle,
+                                     .f = function(.x) { .x %>% group_by(linenumber) %>%
+                                                inner_join(get_sentiments("loughran"), by = c('words' = 'word')) } 
+                                            )
+                          ) %>% 
+  mutate(wordTokenDescScoreTitle = purrr::map(.x = wordTokenDescTitle,
+                                     .f = function(.x) { .x %>% group_by(sentiment) %>%
+                                                summarize(score = n() )  } 
+                                            )
+  ) %>% 
+  mutate(wordTokenDescPost = purrr::map(.x = wordTokenPost,
+                                     .f = function(.x) { .x %>% group_by(linenumber) %>%
+                                                inner_join(get_sentiments("loughran"), by = c('words' = 'word')) } 
+                                            )
+                          ) %>% 
+  mutate(wordTokenDescScorePost = purrr::map(.x = wordTokenDescPost,
+                                     .f = function(.x) { .x %>% group_by(sentiment) %>%
+                                                summarize(score = n() )  } 
+                                            )
+  ) %>% 
+  mutate(wordTokenDescComment = purrr::map(.x = wordTokenComment,
+                                     .f = function(.x) { .x %>% group_by(linenumber) %>%
+                                                inner_join(get_sentiments("loughran"), by = c('words' = 'word')) } 
+                                            )
+                          ) %>% 
+  mutate(wordTokenDescScoreComment = purrr::map(.x = wordTokenDescComment,
+                                     .f = function(.x) { .x %>% group_by(sentiment) %>%
+                                                summarize(score = n() )  } 
+                                            )
+  )
+```
+
+
+# DD
+
+```{r}
+# Title
+future::plan('multiprocess')
+
+all_df_wsb_dd <- all_df_wsb_dd %>% na.omit() %>% 
+  mutate(wordTokenTitle = purrr::map(.x = title,
+                                            .f = function(.x) { .x %>%
+                                                as_tibble() %>% 
+                                                mutate(linenumber = row_number()) %>% 
+                                                unnest_tokens(words, value, token = 'words')} 
+                                            )
+                          ) %>% 
+  mutate(sentenceTokenTitle = purrr::map(.x = title,
+                                            .f = function(.x) { .x %>%
+                                                as_tibble() %>% 
+                                                mutate(linenumber = row_number()) %>% 
+                                                unnest_tokens(sentences, value, token = 'sentences')} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenScoreTitle = purrr::map(.x = wordTokenTitle,
+                                     .f = function(.x) { .x %>% group_by(linenumber) %>%
+                                                inner_join(get_sentiments("afinn"), by = c('words' = 'word')) %>%
+                                                summarize(score = sum(value))} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenScoreSumTitle = purrr::map_dbl(.x = wordTokenScoreTitle,
+                                     .f = function(.x) { .x %>% 
+                                         summarize(score = sum(score)) %>% 
+                                         pull()} 
+                                            )
+                          ) %>% 
+  mutate(sentenceTokenScoreTitle = furrr::future_map(.x = sentenceTokenTitle,
+                                         .f = function(.x) {
+                                           out <- .x %>% mutate(score = purrr::map_dbl(.x = sentences,
+                                                                 .f = function(.x){
+                                                                   sentiment(.x) %>% 
+                                                                     summarize(sentiment = sum(sentiment)) %>% 
+                                                                     pull()
+                                                                   } ))
+                                         },
+                                        .progress = TRUE,
+                                        .options = furrr::furrr_options(seed = TRUE))) %>% 
+  mutate(sentenceTokenScoreSumTitle = purrr::map_dbl(.x = sentenceTokenScoreTitle,
+                                     .f = function(.x) { .x %>% 
+                                         summarize(score = sum(score)) %>% 
+                                         pull()} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenPost = purrr::map(.x = post,
+                                            .f = function(.x) { .x %>%
+                                                as_tibble() %>% 
+                                                mutate(linenumber = row_number()) %>% 
+                                                unnest_tokens(words, value, token = 'words')} 
+                                            )
+                          ) %>% 
+  mutate(sentenceTokenPost = purrr::map(.x = post,
+                                            .f = function(.x) { .x %>%
+                                                as_tibble() %>% 
+                                                mutate(linenumber = row_number()) %>% 
+                                                unnest_tokens(sentences, value, token = 'sentences')} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenScorePost = purrr::map(.x = wordTokenPost,
+                                     .f = function(.x) { .x %>% group_by(linenumber) %>%
+                                                inner_join(get_sentiments("afinn"), by = c('words' = 'word')) %>%
+                                                summarize(score = sum(value))} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenScoreSumPost = purrr::map_dbl(.x = wordTokenScorePost,
+                                     .f = function(.x) { .x %>% 
+                                         summarize(score = sum(score)) %>% 
+                                         pull()} 
+                                            )
+                          ) %>% 
+  mutate(sentenceTokenScorePost = furrr::future_map(.x = sentenceTokenPost,
+                                         .f = function(.x) {
+                                           out <- .x %>% mutate(score = purrr::map_dbl(.x = sentences,
+                                                                 .f = function(.x){
+                                                                   sentiment(.x) %>% 
+                                                                     summarize(sentiment = sum(sentiment)) %>% 
+                                                                     pull()
+                                                                   } ))
+                                         },
+                                        .progress = TRUE,
+                                        .options = furrr::furrr_options(seed = TRUE))) %>% 
+  mutate(sentenceTokenScoreSumPost = purrr::map_dbl(.x = sentenceTokenScorePost,
+                                     .f = function(.x) { .x %>% 
+                                         summarize(score = sum(score)) %>% 
+                                         pull()} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenComment = purrr::map(.x = comment,
+                                            .f = function(.x) { .x %>% 
+                                                mutate(linenumber = row_number()) %>% 
+                                                unnest_tokens(words, value, token = 'words')} 
+                                            )
+                          ) %>% 
+  mutate(sentenceTokenComment = purrr::map(.x = comment,
+                                            .f = function(.x) { .x %>% 
+                                                mutate(linenumber = row_number()) %>% 
+                                                unnest_tokens(sentences, value, token = 'sentences')} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenScoreComment = purrr::map(.x = wordTokenComment,
+                                     .f = function(.x) { .x %>% group_by(linenumber) %>%
+                                                inner_join(get_sentiments("afinn"), by = c('words' = 'word')) %>%
+                                                summarize(score = sum(value))} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenScoreSumComment = purrr::map_dbl(.x = wordTokenScoreComment,
+                                     .f = function(.x) { .x %>% 
+                                         summarize(score = sum(score)) %>% 
+                                         pull()} 
+                                            )
+                          ) %>% 
+  mutate(sentenceTokenScoreComment = furrr::future_map(.x = sentenceTokenComment,
+                                         .f = function(.x) {
+                                           out <- .x %>% mutate(score = purrr::map_dbl(.x = sentences,
+                                                                 .f = function(.x){
+                                                                   sentiment(.x) %>% 
+                                                                     summarize(sentiment = sum(sentiment)) %>% 
+                                                                     pull()
+                                                                   } ))
+                                         },
+                                        .progress = TRUE,
+                                        .options = furrr::furrr_options(seed = TRUE))) %>% 
+  mutate(sentenceTokenScoreSumComment = purrr::map_dbl(.x = sentenceTokenScoreComment,
+                                     .f = function(.x) { .x %>% 
+                                         summarize(score = sum(score)) %>% 
+                                         pull()} 
+                                            )
+                          ) %>% 
+  mutate(wordTokenDescTitle = purrr::map(.x = wordTokenTitle,
+                                     .f = function(.x) { .x %>% group_by(linenumber) %>%
+                                                inner_join(get_sentiments("loughran"), by = c('words' = 'word')) } 
+                                            )
+                          ) %>% 
+  mutate(wordTokenDescScoreTitle = purrr::map(.x = wordTokenDescTitle,
+                                     .f = function(.x) { .x %>% group_by(sentiment) %>%
+                                                summarize(score = n() )  } 
+                                            )
+  ) %>% 
+  mutate(wordTokenDescPost = purrr::map(.x = wordTokenPost,
+                                     .f = function(.x) { .x %>% group_by(linenumber) %>%
+                                                inner_join(get_sentiments("loughran"), by = c('words' = 'word')) } 
+                                            )
+                          ) %>% 
+  mutate(wordTokenDescScorePost = purrr::map(.x = wordTokenDescPost,
+                                     .f = function(.x) { .x %>% group_by(sentiment) %>%
+                                                summarize(score = n() )  } 
+                                            )
+  ) %>% 
+  mutate(wordTokenDescComment = purrr::map(.x = wordTokenComment,
+                                     .f = function(.x) { .x %>% group_by(linenumber) %>%
+                                                inner_join(get_sentiments("loughran"), by = c('words' = 'word')) } 
+                                            )
+                          ) %>% 
+  mutate(wordTokenDescScoreComment = purrr::map(.x = wordTokenDescComment,
+                                     .f = function(.x) { .x %>% group_by(sentiment) %>%
+                                                summarize(score = n() )  } 
+                                            )
+  )
+```
+
+
+
+
+```{r, eval=F}
+dpms <- read.table('dpms.txt',sep = ' ', header = TRUE) %>% 
+  mutate(across(2:6, .fns = function(x) 0.01*(str_replace_all(x, '%', '') %>% as.numeric()) )) %>% 
+  mutate(Date = as.Date(Date, format = '%d-%m-%y'))
+
+dpms_date <- dpms$Date
+
+dpms <-dpms %>% select(-Date)
+  
+dpms_ret <- as.xts(dpms, order.by = dpms_date)
+
+dpms_ret
+
+charts.PerformanceSummary(dpms_ret)
+charts.RollingPerformance(dpms_ret, scale = 1)
+chart.RiskReturnScatter(dpms_ret, add.sharpe = c(0.9), Rf = 0.025/12)
+chart.Boxplot(dpms_ret)
+chart.Drawdown(dpms_ret)
+chart.QQPlot(dpms_ret[,5])
+chart.SnailTrail(dpms_ret[,5])
+chart.VaRSensitivity(dpms_ret[,5])
+```
+
+
+
