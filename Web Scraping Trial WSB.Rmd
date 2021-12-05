@@ -27,7 +27,7 @@ library(furrr)
 nasdaqtraded <- read.csv('/Users/Caleb/Documents/Working Directory/Nasdaq File/nasdaqtraded.txt', sep = '|')
 tickers <- nasdaqtraded %>% 
   # dplyr::filter(ETF == 'N') %>% 
-  pull(Symbol)
+  pull(Symbol)#
 ```
 
 

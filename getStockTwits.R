@@ -1,6 +1,6 @@
 require("purrr");require("sentimentr");require("tidytext");require("httr");require("lubridate");require("furrr");require("jsonlite")
 
-# Function to get Stocktwits
+# Function to get Stocktwits # Test
 
 getStockTwits <- function(tickers, n) {
   
