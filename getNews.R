@@ -153,62 +153,6 @@ bbNewsTime <- read_html('https://finviz.com/news.ashx') %>%
     }
   ))
 
-marketwatchNewsTime <- read_html('https://finviz.com/news.ashx') %>%
-  html_nodes('.is-1~ td .nn-tab-link') %>%
-  html_attr("href") %>%
-  as_tibble() %>%
-  mutate(
-    time = furrr::future_map(
-      .x = value,
-      .f = function(.x) {
-        tmp <- tryCatch(
-          .x %>%
-            read_html() %>%
-            html_nodes(xpath = '/html/head/meta[48]') %>%
-            html_attr('content') %>%
-            unlist(),
-          error = function(e) {
-            print(paste(.x, 'not found'))
-            NA
-          }
-        )
-      },
-      .progress = TRUE,
-      .options = furrr::furrr_options(seed = TRUE)
-    ),
-    time = lubridate::as_datetime(unlist(map(
-      time, ~ replace(.x, is_empty(.x), NA)
-    )), tz = 'Asia/Singapore')
-  ) %>%
-  filter(!is.na(time)) %>%
-  mutate(
-    articleTitle = furrr::future_map_chr(
-      .x = value,
-      .f = function(.x) {
-        .x %>%
-          read_html() %>%
-          html_nodes(xpath = '/html/head/title/text()') %>%
-          html_text()
-      },
-      .progress = TRUE,
-      .options = furrr::furrr_options(seed = TRUE)
-    )
-  ) %>%
-  mutate(
-    articleText = furrr::future_map(
-      .x = value,
-      .f = function(.x) {
-        .x %>%
-          read_html() %>%
-          html_nodes('p') %>%
-          html_text() %>%
-          as_tibble()
-      },
-      .progress = TRUE,
-      .options = furrr::furrr_options(seed = TRUE)
-    )
-  )
-
 # Marketwatch News
 marketwatchNewsTime <- read_html('https://finviz.com/news.ashx') %>%
   html_nodes('.is-1~ td .nn-tab-link') %>%
