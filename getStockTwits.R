@@ -1,6 +1,6 @@
-require("purrr");require("sentimentr");require("tidytext");require("httr");require("lubridate");require("furrr");require("jsonlite")
+require("purrr");require("httr");require("lubridate");require("furrr");require("jsonlite")
 
-# Function to get Stocktwits # Test
+# Function to get Stocktwits
 
 getStockTwits <- function(tickers, n) {
   
@@ -11,7 +11,7 @@ getStockTwits <- function(tickers, n) {
         all(is.na(x)), logical(1))])
     }
   
-  # Internal function obtain latest 30 tweets
+  # Internal function to obtain latest 30 tweets
   tmpFun <- function(ticker, n = 2) {
     out <- purrr::map(
       ticker,
