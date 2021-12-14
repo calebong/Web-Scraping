@@ -1,11 +1,3 @@
----
-output:
-  html_document:
-    keep_md: true
----
-
-
-
 # Illustration of getNewsR script
 
 This short document displays the output of getNewsR, a script that extracts the latest financial news from various news sources.
