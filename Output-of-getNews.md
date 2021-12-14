@@ -1,6 +1,6 @@
-# Illustration of getNewsR script
+# Illustration of getNews script
 
-This short document displays the output of getNewsR, a script that extracts the latest financial news from various news sources.
+This short document displays the output of getNews, a script that extracts the latest financial news from various news sources.
 
 # Load and run script
 
