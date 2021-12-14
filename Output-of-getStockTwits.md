@@ -1,11 +1,3 @@
----
-output:
-  html_document:
-    keep_md: true
----
-
-
-
 # Illustration of getStockTwits function
 
 This short document displays the output of getStockTwits, a function that extracts the latest comments from StockTwits.
