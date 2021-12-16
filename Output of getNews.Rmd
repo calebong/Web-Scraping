@@ -14,7 +14,7 @@ This short document displays the output of getNews, a script that extracts the l
 
 # Load and run script
 
-```{r, message=FALSE, warning=FALSE, echo=FALSE}
+```{r, message=FALSE, warning=FALSE}
 # Load libraries
 
 # For pipe
@@ -31,8 +31,8 @@ source("getNews.R")
 The output contains columns that contain the news source URL, time of news publication, article title, and article text. This information can be utilized for further analysis (e.g. sentiment analysis of news article texts).
 
 ```{r}
-# Show first 15 entries
-head(allNews, 5)
+# Show first 20 entries
+head(allNews, 20)
 ```
 
 
