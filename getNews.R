@@ -14,7 +14,7 @@ bbNewsSource <- read_html('https://finviz.com/news.ashx?v=2') %>%
       .x = value,
       .f = function(.x) {
         ua <-
-          "Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:94.0) Gecko/20100101 Firefox/94.0"
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.55 Safari/537.36 Edg/96.0.1054.34"
         tmp <- tryCatch(
           .x %>%
             httr::GET(user_agent(ua)) %>%
@@ -41,7 +41,7 @@ bbNewsSource <- read_html('https://finviz.com/news.ashx?v=2') %>%
       .x = value,
       .f = function(.x) {
         ua <-
-          "Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:94.0) Gecko/20100101 Firefox/94.0"
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.55 Safari/537.36 Edg/96.0.1054.34"
         tmp <-
           tryCatch(
             .x %>%
@@ -63,7 +63,7 @@ bbNewsSource <- read_html('https://finviz.com/news.ashx?v=2') %>%
     .x = value,
     .f = function(.x) {
       ua <-
-        "Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:94.0) Gecko/20100101 Firefox/94.0"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.55 Safari/537.36 Edg/96.0.1054.34"
       tmp <- tryCatch(
         .x %>%
           httr::GET(user_agent(ua)) %>%
@@ -88,7 +88,7 @@ bbNewsTime <- read_html('https://finviz.com/news.ashx') %>%
       .x = value,
       .f = function(.x) {
         ua <-
-          "Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:94.0) Gecko/20100101 Firefox/94.0"
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.55 Safari/537.36 Edg/96.0.1054.34"
         tmp <- tryCatch(
           .x %>%
             httr::GET(user_agent(ua)) %>%
@@ -115,7 +115,7 @@ bbNewsTime <- read_html('https://finviz.com/news.ashx') %>%
       .x = value,
       .f = function(.x) {
         ua <-
-          "Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:94.0) Gecko/20100101 Firefox/94.0"
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.55 Safari/537.36 Edg/96.0.1054.34"
         tmp <-
           tryCatch(
             .x %>%
@@ -137,7 +137,7 @@ bbNewsTime <- read_html('https://finviz.com/news.ashx') %>%
     .x = value,
     .f = function(.x) {
       ua <-
-        "Mozilla/5.0 (Windows NT 6.1; Win64; x64; rv:94.0) Gecko/20100101 Firefox/94.0"
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.55 Safari/537.36 Edg/96.0.1054.34"
       tmp <- tryCatch(
         .x %>%
           httr::GET(user_agent(ua)) %>%
