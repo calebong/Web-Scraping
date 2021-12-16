@@ -1,0 +1,46 @@
+---
+output:
+  html_document:
+    keep_md: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Illustration of getNews script
+
+This short document displays the output of getNews, a script that extracts the latest financial news from various news sources.
+
+# Load and run script
+
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
+# Load libraries
+
+# For pipe
+library(magrittr)
+
+# For table
+library(kableExtra)
+
+source("getNews.R")
+```
+
+# Display allNews output
+
+The output contains columns that contain the news source URL, time of news publication, article title, and article text. This information can be utilized for further analysis (e.g. sentiment analysis of news article texts).
+
+```{r}
+# Show first 15 entries
+head(allNews, 5)
+```
+
+
+```{r}
+allNews[1:100,] %>%
+  kable(format = "html", table.attr = "style='width:30%;'") %>% 
+  kable_styling("striped", full_width = F, fixed_thead = T) %>%
+  scroll_box(height = "900px", width = '100%')
+```
+
+
